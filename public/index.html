@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>בדיקת סילבוסים</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #5f6b7a; --line: #dde2e8;
+    --accent: #2457c5; --ok: #1f7a45; --ok-bg: #e7f5ec; --bad: #b3261e; --bad-bg: #fdecea; --warn-bg: #fff6e0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c; --card: #1d2229; --text: #e6e9ee; --muted: #9aa5b3; --line: #313844;
+      --accent: #7aa2ff; --ok: #6fd39a; --ok-bg: #173323; --bad: #ff8a80; --bad-bg: #3a1e1c; --warn-bg: #3a3118;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, "Segoe UI", Arial, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  label { font-weight: 600; display: block; margin-bottom: 6px; }
+  input[type=password] { width: 100%; max-width: 280px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+  #drop { border: 2px dashed var(--line); border-radius: 12px; padding: 32px 16px; text-align: center; cursor: pointer; transition: border-color .15s; }
+  #drop.over, #drop:hover { border-color: var(--accent); }
+  #drop strong { color: var(--accent); }
+  button { font: inherit; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+  .actions { display: flex; gap: 8px; justify-content: flex-end; margin-bottom: 16px; }
+  .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .file { color: var(--muted); font-size: .9rem; }
+  .badge { display: inline-block; padding: 4px 12px; border-radius: 999px; font-weight: 700; }
+  .ok { background: var(--ok-bg); color: var(--ok); }
+  .bad { background: var(--bad-bg); color: var(--bad); }
+  .pending { color: var(--muted); }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: .95rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: right; vertical-align: top; }
+  th { background: var(--bg); }
+  .notes { background: var(--warn-bg); border-radius: 8px; padding: 10px 14px; margin-top: 12px; }
+  .notes ul { margin: 4px 0 0; padding-inline-start: 20px; }
+  .error { color: var(--bad); }
+  @media print {
+    .no-print { display: none !important; }
+    body { background: #fff; color: #000; }
+    .card { break-inside: avoid; border-color: #bbb; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>בדיקת סילבוסים</h1>
+  <p class="sub">העלו סילבוס אחד או יותר. כל סילבוס נבדק מול 15 רכיבי החובה של התבנית. הבדיקה מתייחסת למבנה ולתוכן, לא לניסוח.</p>
+
+  <div class="card no-print" id="codeCard" hidden>
+    <label for="code">קוד גישה</label>
+    <input type="password" id="code" autocomplete="off">
+  </div>
+
+  <div class="card no-print">
+    <div id="drop">
+      <p><strong>לחצו לבחירת קבצים</strong> או גררו לכאן</p>
+      <p class="file">Word (docx) או PDF</p>
+    </div>
+    <input type="file" id="files" accept=".docx,.pdf" multiple hidden>
+  </div>
+
+  <div class="actions no-print" id="actions" hidden>
+    <button onclick="window.print()">הדפסה / שמירה כ-PDF</button>
+  </div>
+
+  <div id="summary"></div>
+  <div id="results"></div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const drop = $("drop"), input = $("files"), results = $("results");
+const all = [];
+
+try { $("code").value = localStorage.getItem("accessCode") || ""; } catch {}
+fetch("/api/config").then(r => r.json()).then(c => { $("codeCard").hidden = !c.needsCode; }).catch(() => {});
+
+drop.onclick = () => input.click();
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); run([...e.dataTransfer.files]); };
+input.onchange = () => { run([...input.files]); input.value = ""; };
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function toBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(",")[1]);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+async function run(files) {
+  const code = $("code").value.trim();
+  try { localStorage.setItem("accessCode", code); } catch {}
+  $("actions").hidden = false;
+  // One at a time keeps each request short and the results in upload order.
+  for (const file of files) {
+    const entry = { file: file.name, el: document.createElement("div") };
+    entry.el.className = "card";
+    entry.el.innerHTML = `<div class="head"><span class="file">${esc(file.name)}</span><span class="pending">בודק… (עד כדקה)</span></div>`;
+    results.prepend(entry.el);
+    all.push(entry);
+    try {
+      const res = await fetch("/api/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-access-code": code },
+        body: JSON.stringify({ filename: file.name, data: await toBase64(file) }),
+      });
+      const body = await res.json().catch(() => ({ error: "תשובה לא תקינה מהשרת" }));
+      if (!res.ok) throw new Error(body.error || res.statusText);
+      entry.result = body;
+      render(entry);
+    } catch (err) {
+      entry.error = err.message;
+      entry.el.innerHTML = `<div class="head"><span class="file">${esc(file.name)}</span></div><p class="error">${esc(err.message)}</p>`;
+    }
+    renderSummary();
+  }
+}
+
+function render({ el, file, result: r }) {
+  const ok = r.verdict === "approved";
+  let html = `<div class="head"><h2 style="margin:0;font-size:1.15rem">${esc(r.course)} · ${esc(r.lecturer)}</h2>
+    <span class="badge ${ok ? "ok" : "bad"}">${ok ? "✅ מאושר" : "❌ לא מאושר"}</span></div>
+    <p class="file">${esc(file)}</p><p>${esc(r.reason)}</p>`;
+  if (r.gaps.length) {
+    html += `<div class="table-wrap"><table><thead><tr><th>#</th><th>רכיב</th><th>סטטוס</th><th>מה חסר</th><th>מה להוסיף</th></tr></thead><tbody>` +
+      r.gaps.map(g => `<tr><td>${esc(g.num)}</td><td>${esc(g.component)}</td><td>${esc(g.status)}</td><td>${esc(g.missing)}</td><td>${esc(g.fix)}</td></tr>`).join("") +
+      `</tbody></table></div>`;
+  }
+  if (r.notes.length) {
+    html += `<div class="notes"><b>הערות לתיקון (לא מונעות אישור)</b><ul>${r.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul></div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderSummary() {
+  const done = all.filter(e => e.result || e.error);
+  if (done.length < 2) { $("summary").innerHTML = ""; return; }
+  $("summary").innerHTML = `<div class="card"><b>סיכום</b><div class="table-wrap"><table><thead><tr><th>קורס</th><th>מרצה</th><th>החלטה</th><th>חוסרים</th></tr></thead><tbody>` +
+    done.map(e => e.result
+      ? `<tr><td>${esc(e.result.course)}</td><td>${esc(e.result.lecturer)}</td><td>${e.result.verdict === "approved" ? "✅ מאושר" : "❌ לא מאושר"}</td><td>${e.result.gaps.length}</td></tr>`
+      : `<tr><td colspan="2">${esc(e.file)}</td><td colspan="2" class="error">שגיאה</td></tr>`).join("") +
+    `</tbody></table></div></div>`;
+}
+</script>
+</body>
+</html>

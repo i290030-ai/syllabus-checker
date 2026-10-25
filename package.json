@@ -1,0 +1,9 @@
+{
+  "name": "syllabus-checker",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
+    "mammoth": "^1.13.0"
+  }
+}
